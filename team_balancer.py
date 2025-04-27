@@ -537,8 +537,8 @@ def main():
     parser.add_argument('csv_file', help='Path to the CSV file containing player data')
     parser.add_argument('--num-teams', '-n', type=int, required=True, 
                         help='Number of teams to create')
-    parser.add_argument('--options', '-o', type=int, default=4,
-                        help='Number of distribution options to generate (default: 4)')
+    parser.add_argument('--strategies', '-s', type=str, default='round_robin,random,cluster,snake',
+                        help='Comma-separated list of strategies to use (default: round_robin,random,cluster,snake)')
     parser.add_argument('--custom-weights', '-w', type=str,
                         help='Custom weights for tiers in format "S:13,S-:10,A+:9,..." (default uses built-in weights)')
 
@@ -562,14 +562,18 @@ def main():
         # Validate player count and determine players per team
         players_per_team = validate_player_count(players, args.num_teams)
 
-        # Set distribution strategies to use
-        strategies = ['round_robin', 'random', 'cluster', 'snake']
-        num_options = min(args.options, len(strategies))
+        # Get and validate the requested strategies
+        valid_strategies = ['round_robin', 'random', 'cluster', 'snake']
+        requested_strategies = [s.strip() for s in args.strategies.split(',')]
+        
+        # Validate each strategy
+        for strategy in requested_strategies:
+            if strategy not in valid_strategies:
+                raise ValueError(f"Invalid strategy: '{strategy}'. Valid strategies are: {', '.join(valid_strategies)}")
 
-        # Create team distributions using different strategies
+        # Create team distributions using the requested strategies
         distributions = []
-        for i in range(num_options):
-            strategy = strategies[i]
+        for strategy in requested_strategies:
             distribution = create_team_distribution(
                 strategy, players, args.num_teams, players_per_team
             )
@@ -581,12 +585,6 @@ def main():
         # Print each distribution with its summary
         for i, distribution in enumerate(distributions, 1):
             print_distribution_summary(distribution, i)
-
-        # If only one option was requested, maintain backward compatibility
-        if args.options == 1:
-            # Print the best distribution in the original format
-            print_teams(distributions[0].teams)
-
     except Exception as e:
         print(f"Error: {str(e)}", file=sys.stderr)
         sys.exit(1)
