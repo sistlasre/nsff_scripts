@@ -9,20 +9,26 @@ import random
 import statistics
 from pathlib import Path
 
-def load_players(csv_path: str) -> List[Tuple[str, str, int]]:
+def load_players(csv_path: str, custom_weights: Dict[str, int] = None) -> List[Tuple[str, str, int]]:
     """
     Load players from CSV file and convert tiers to numeric scores.
 
     Args:
         csv_path: Path to the CSV file
+        custom_weights: Optional dictionary mapping tier names to custom score weights
 
     Returns:
         List of tuples containing (name, tier, score)
     """
+    # Default tier scores if no custom weights are provided
     tier_scores = {
         'S': 13, 'S-': 10, 'A+': 9, 'A': 8, 'B': 5, 'C': 2,
         'D': 1, 'E': 0, 'F': -1, 'G': -2
     }
+
+    # Use custom weights if provided
+    if custom_weights:
+        tier_scores = custom_weights
 
     players = []
     seen_names = set()  # Track player names to prevent duplicates
@@ -196,7 +202,7 @@ def evaluate_teams(teams: List[List[Tuple[str, str, int]]]) -> Dict:
 
     # Calculate combined score (weighted sum)
     score = strength_variance * 2 + tier_imbalance + strength_diff * 10
-    
+
     return {
         'strength_variance': strength_variance,
         'strength_diff': strength_diff,
@@ -287,7 +293,7 @@ def distribute_teams_random(players: List[Tuple[str, str, int]],
                            players_per_team: int) -> List[List[Tuple[str, str, int]]]:
     """
     Distribute players into teams randomly with tier constraints.
-    
+
     This strategy ensures even tier distribution by randomly assigning players
     from each tier to teams, distributing them evenly.
 
@@ -306,31 +312,70 @@ def distribute_teams_random(players: List[Tuple[str, str, int]],
         if tier not in players_by_tier:
             players_by_tier[tier] = []
         players_by_tier[tier].append(player)
-    
+
     # Initialize teams
     teams = [[] for _ in range(num_teams)]
-    
+
     # Distribute players tier by tier
     for tier, tier_players in sorted(players_by_tier.items()):
         # Shuffle players within each tier
         random.shuffle(tier_players)
-        
+
         # Assign players of this tier to teams evenly
         for i, player in enumerate(tier_players):
             team_idx = i % num_teams
             teams[team_idx].append(player)
-    
+
     # Shuffle teams to avoid consistent tier patterns
     for team in teams:
         random.shuffle(team)
-    
+
     # Validate team sizes
     for team in teams:
         if len(team) != players_per_team:
             # Rebalance if needed (should rarely happen with even distribution)
             all_players = [player for team in teams for player in team]
             return distribute_teams_round_robin(all_players, num_teams, players_per_team)
-    
+
+    return teams
+
+def distribute_teams_snake(players: List[Tuple[str, str, int]],
+                         num_teams: int,
+                         players_per_team: int) -> List[List[Tuple[str, str, int]]]:
+    """
+    Distribute players into teams using a pure snake draft strategy.
+
+    This strategy simply sorts players by score in descending order and
+    assigns them to teams in a snake draft pattern without any optimization.
+
+    Args:
+        players: List of (name, tier, score) tuples
+        num_teams: Number of teams to create
+        players_per_team: Number of players per team
+
+    Returns:
+        List of teams, where each team is a list of player tuples
+    """
+    # Sort players by score in descending order
+    sorted_players = sorted(players, key=lambda x: x[2], reverse=True)
+
+    # Initialize teams
+    teams = [[] for _ in range(num_teams)]
+
+    # Distribute players in snake draft pattern
+    for i, player in enumerate(sorted_players):
+        round_num = i // num_teams
+        if round_num % 2 == 0:  # Forward order (round 0, 2, 4...)
+            team_idx = i % num_teams
+        else:  # Reverse order (round 1, 3, 5...)
+            team_idx = num_teams - 1 - (i % num_teams)
+        teams[team_idx].append(player)
+
+    # Validate team sizes
+    for team in teams:
+        if len(team) != players_per_team:
+            raise ValueError(f"Failed to distribute players evenly. Team has {len(team)} players instead of {players_per_team}")
+
     return teams
 
 def distribute_teams_cluster(players: List[Tuple[str, str, int]],
@@ -338,7 +383,7 @@ def distribute_teams_cluster(players: List[Tuple[str, str, int]],
                             players_per_team: int) -> List[List[Tuple[str, str, int]]]:
     """
     Distribute players using cluster-based approach.
-    
+
     This strategy groups similar-strength players together first, then
     distributes those groups among teams in a balanced manner.
 
@@ -352,13 +397,13 @@ def distribute_teams_cluster(players: List[Tuple[str, str, int]],
     """
     # Sort players by score
     sorted_players = sorted(players, key=lambda x: x[2], reverse=True)
-    
+
     # Group players into clusters of size num_teams
     clusters = [sorted_players[i:i+num_teams] for i in range(0, len(sorted_players), num_teams)]
-    
+
     # Initialize teams
     teams = [[] for _ in range(num_teams)]
-    
+
     # Distribute clusters in alternating patterns
     for i, cluster in enumerate(clusters):
         if i % 2 == 0:  # Forward order
@@ -369,13 +414,13 @@ def distribute_teams_cluster(players: List[Tuple[str, str, int]],
             for j, player in enumerate(cluster):
                 if j < len(teams):
                     teams[len(teams) - 1 - j].append(player)
-    
+
     # Validate team sizes
     for team in teams:
         if len(team) != players_per_team:
             # This shouldn't happen with perfect division, but just in case
             raise ValueError(f"Failed to distribute players evenly in cluster method. Team has {len(team)} players instead of {players_per_team}")
-    
+
     return teams
 
 def create_team_distribution(strategy_name: str, 
@@ -410,24 +455,29 @@ def create_team_distribution(strategy_name: str,
             'func': distribute_teams_cluster,
             'name': 'Cluster-Based Distribution',
             'description': 'Groups similar-strength players together, then distributes groups to maximize diversity within teams.'
+        },
+        'snake': {
+            'func': distribute_teams_snake,
+            'name': 'Pure Snake Draft',
+            'description': 'Simple snake draft pattern where teams pick players in alternating order without optimization.'
         }
     }
-    
+
     # Ensure strategy exists
     if strategy_name not in strategies:
         raise ValueError(f"Unknown distribution strategy: {strategy_name}")
-    
+
     strategy = strategies[strategy_name]
-    
+
     # Create initial distribution
     initial_teams = strategy['func'](players, num_teams, players_per_team)
-    
+
     # Optimize the distribution
-    optimized_teams = optimize_teams(initial_teams)
-    
+    optimized_teams = initial_teams if strategy_name == "snake" else optimize_teams(initial_teams)
+
     # Evaluate the distribution
     evaluation = evaluate_teams(optimized_teams)
-    
+
     # Create and return the TeamDistribution object
     return TeamDistribution(
         name=strategy['name'],
@@ -478,7 +528,7 @@ def print_distribution_summary(distribution: TeamDistribution, distribution_numb
     print(f"Max strength difference between teams: {distribution.strength_diff}")
     print(f"Tier imbalance score: {distribution.tier_imbalance:.2f}")
     print(f"Overall balance score: {distribution.score:.2f} (lower is better)")
-    
+
     # Print the team compositions
     print_teams(distribution.teams)
 
@@ -487,23 +537,35 @@ def main():
     parser.add_argument('csv_file', help='Path to the CSV file containing player data')
     parser.add_argument('--num-teams', '-n', type=int, required=True, 
                         help='Number of teams to create')
-    parser.add_argument('--options', '-o', type=int, default=3,
-                        help='Number of distribution options to generate (default: 3)')
-    args = parser.parse_args()
+    parser.add_argument('--options', '-o', type=int, default=4,
+                        help='Number of distribution options to generate (default: 4)')
+    parser.add_argument('--custom-weights', '-w', type=str,
+                        help='Custom weights for tiers in format "S:13,S-:10,A+:9,..." (default uses built-in weights)')
 
     try:
-        # Load players from CSV
-        players = load_players(args.csv_file)
+        args = parser.parse_args()
+
+        # Parse custom weights if provided
+        custom_weights = None
+        if args.custom_weights:
+            try:
+                custom_weights = {}
+                for pair in args.custom_weights.split(','):
+                    tier, weight = pair.split(':')
+                    custom_weights[tier.strip()] = int(weight.strip())
+            except ValueError:
+                raise ValueError("Invalid format for custom weights. Use format like 'S:13,S-:10,A+:9,...'")
+
+        # Load players from CSV with custom weights if provided
+        players = load_players(args.csv_file, custom_weights)
 
         # Validate player count and determine players per team
         players_per_team = validate_player_count(players, args.num_teams)
 
         # Set distribution strategies to use
-        strategies = ['round_robin', 'random', 'cluster']
-        
-        # Limit number of options to available strategies
+        strategies = ['round_robin', 'random', 'cluster', 'snake']
         num_options = min(args.options, len(strategies))
-        
+
         # Create team distributions using different strategies
         distributions = []
         for i in range(num_options):
@@ -512,14 +574,14 @@ def main():
                 strategy, players, args.num_teams, players_per_team
             )
             distributions.append(distribution)
-        
+
         # Sort distributions by score (lower is better)
         distributions.sort(key=lambda d: d.score)
-        
+
         # Print each distribution with its summary
         for i, distribution in enumerate(distributions, 1):
             print_distribution_summary(distribution, i)
-        
+
         # If only one option was requested, maintain backward compatibility
         if args.options == 1:
             # Print the best distribution in the original format
